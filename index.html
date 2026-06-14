@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>残置計算アプリ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        input[type="number"] { font-size: 1.25rem; text-align: right; }
+        .result-highlight { background-color: #ebf8ff; color: #2b6cb0; font-weight: bold; }
+        
+        /* ARカメラ用オーバーレイ設定 */
+        #camera-container { position: relative; width: 100%; max-width: 500px; margin: 0 auto; overflow: hidden; background: #000; border-radius: 0.5rem; }
+        video { width: 100%; height: auto; display: block; }
+        .ar-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.5); /* 全体を少し暗く */
+            pointer-events: none; /* タップを貫通させる */
+        }
+        /* 読み取り枠（ここだけ透明に） */
+        .ar-frame {
+            position: absolute;
+            top: 20%; left: 10%; width: 80%; height: 60%;
+            border: 3px solid #3b82f6; border-radius: 8px;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+        }
+        /* 枠内のガイド線（レジ画面の表をイメージ） */
+        .ar-line { width: 100%; height: 1px; background: rgba(59, 130, 246, 0.5); position: absolute; }
+        .ar-line-h1 { top: 33%; } .ar-line-h2 { top: 66%; }
+        .ar-line-v { top: 0; left: 50%; width: 1px; height: 100%; background: rgba(59, 130, 246, 0.5); }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans p-4 relative">
+
+<div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6 relative">
+    
+    <div class="flex justify-between items-center mb-6">
+        <h1 id="appTitle" class="text-2xl font-bold text-red-600">残置計算アプリ(15万円)</h1>
+        <button onclick="toggleSettings()" class="text-gray-500 hover:text-gray-800 p-2 focus:outline-none">
+            <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+        </button>
+    </div>
+
+    <button onclick="startCamera()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg mb-4 flex items-center justify-center shadow-md">
+        <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+        レジ画面を撮影して入力
+    </button>
+
+    <div id="alertArea" class="hidden mb-4 p-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert"></div>
+
+    <div class="grid grid-cols-2 gap-4 mb-6 text-center">
+        <div class="p-3 bg-gray-50 rounded border">
+            <p class="text-xs text-gray-500">現在の総額</p>
+            <p id="totalAmount" class="text-xl font-bold">¥0</p>
+        </div>
+        <div class="p-3 bg-red-50 rounded border">
+            <p class="text-xs text-gray-500">現金売上高</p>
+            <p id="salesAmount" class="text-xl font-bold text-red-600">¥0</p>
+        </div>
+    </div>
+
+    <table class="w-full text-sm text-left mb-6">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-200">
+            <tr>
+                <th class="px-2 py-3 text-center">金種</th>
+                <th class="px-2 py-3 text-center">現在の枚数</th>
+                <th class="px-2 py-3 text-center text-blue-600">入力(残置)</th>
+            </tr>
+        </thead>
+        <tbody id="coinTable"></tbody>
+    </table>
+
+    <button onclick="calculate()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 px-4 rounded-lg text-xl shadow-lg active:scale-95 transition-transform">
+        計算する
+    </button>
+</div>
+
+<div id="settingsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl max-w-sm w-full p-6 max-h-[90vh] overflow-y-auto">
+        <h2 class="text-xl font-bold mb-4 border-b pb-2">詳細設定</h2>
+        
+        <label class="block mb-4">
+            <span class="text-sm text-gray-700 font-bold">目標残置金額 (円)</span>
+            <input type="number" id="settingTarget" value="150000" class="mt-1 block w-full border rounded p-2 focus:ring-blue-500">
+        </label>
+
+        <p class="text-sm text-gray-700 font-bold mb-2">残置の上限・希望枚数</p>
+        <div class="grid grid-cols-2 gap-2 text-sm">
+            <label class="flex items-center justify-between border-b py-1">5千円: <input type="number" id="limit_5000" value="15" class="w-16 border rounded p-1 text-right"></label>
+            <label class="flex items-center justify-between border-b py-1">千円: <input type="number" id="limit_1000" value="100" class="w-16 border rounded p-1 text-right"></label>
+            <label class="flex items-center justify-between border-b py-1">500円: <input type="number" id="limit_500" value="30" class="w-16 border rounded p-1 text-right"></label>
+            <label class="flex items-center justify-between border-b py-1">100円: <input type="number" id="limit_100" value="100" class="w-16 border rounded p-1 text-right"></label>
+            <label class="flex items-center justify-between border-b py-1">50円: <input type="number" id="limit_50" value="50" class="w-16 border rounded p-1 text-right"></label>
+            <label class="flex items-center justify-between border-b py-1">10円: <input type="number" id="limit_10" value="100" class="w-16 border rounded p-1 text-right"></label>
+            <label class="flex items-center justify-between py-1">5円: <input type="number" id="limit_5" value="20" class="w-16 border rounded p-1 text-right"></label>
+            <label class="flex items-center justify-between py-1">1円: <input type="number" id="limit_1" value="20" class="w-16 border rounded p-1 text-right"></label>
+        </div>
+
+        <div class="mt-6 flex justify-end gap-2">
+            <button onclick="toggleSettings()" class="px-4 py-2 bg-gray-200 rounded text-gray-800">キャンセル</button>
+            <button onclick="saveSettings()" class="px-4 py-2 bg-blue-600 rounded text-white font-bold">保存して反映</button>
+        </div>
+    </div>
+</div>
+
+<div id="cameraModal" class="hidden fixed inset-0 bg-black z-50 flex flex-col justify-center">
+    <div class="p-4 text-center text-white bg-black bg-opacity-70 absolute top-0 w-full z-10">
+        <p class="font-bold">レジ画面の「自動釣銭機在高」列を<br>青い枠線に合わせて撮影してください</p>
+    </div>
+    
+    <div id="camera-container">
+        <video id="videoElement" autoplay playsinline></video>
+        <div class="ar-frame">
+            <div class="ar-line ar-line-h1"></div>
+            <div class="ar-line ar-line-h2"></div>
+            <div class="ar-line ar-line-v"></div>
+            <p class="absolute top-[-30px] text-blue-300 text-sm font-bold tracking-widest">画面ガイド</p>
+        </div>
+    </div>
+
+    <div class="absolute bottom-10 w-full flex justify-center gap-6 px-4">
+        <button onclick="stopCamera()" class="w-16 h-16 bg-gray-500 rounded-full flex items-center justify-center text-white">✕</button>
+        <button onclick="captureImage()" class="w-20 h-20 bg-white rounded-full border-4 border-blue-500 shadow-lg flex items-center justify-center text-blue-600 font-bold active:scale-90 transition-transform">撮影</button>
+    </div>
+</div>
+
+<canvas id="canvasElement" class="hidden"></canvas>
+
+<script>
+    const denoms = [10000, 5000, 2000, 1000, 500, 100, 50, 10, 5, 1];
+    
+    // 設定パラメータ（初期値）
+    let APP_SETTINGS = {
+        target: 150000,
+        limits: { 5000: 15, 1000: 100, 500: 30, 100: 100, 50: 50, 10: 100, 5: 20, 1: 20 }
+    };
+
+    // 初期化
+    window.onload = () => {
+        const tbody = document.getElementById('coinTable');
+        denoms.forEach(d => {
+            let is2000 = d === 2000 ? "bg-gray-100" : "";
+            tbody.innerHTML += `
+                <tr class="border-b ${is2000}">
+                    <td class="px-2 py-3 font-medium text-right text-lg">${d.toLocaleString()}円 ${d===2000 ? "<span class='text-xs text-gray-400 block'>不可</span>" : ""}</td>
+                    <td class="px-2 py-2"><input type="number" id="input_${d}" min="0" value="0" inputmode="numeric" class="w-full border rounded p-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"></td>
+                    <td class="px-2 py-2 text-center text-2xl text-gray-400" id="result_${d}">-</td>
+                </tr>
+            `;
+        });
+        updateTitle();
+    };
+
+    /* --- 設定関連 --- */
+    function toggleSettings() {
+        const modal = document.getElementById('settingsModal');
+        modal.classList.toggle('hidden');
+    }
+
+    function saveSettings() {
+        APP_SETTINGS.target = parseInt(document.getElementById('settingTarget').value) || 150000;
+        denoms.forEach(d => {
+            if (d !== 10000 && d !== 2000) {
+                APP_SETTINGS.limits[d] = parseInt(document.getElementById(`limit_${d}`).value) || 0;
+            }
+        });
+        updateTitle();
+        toggleSettings();
+        calculate(); // 設定変更後に再計算
+    }
+
+    function updateTitle() {
+        let val = APP_SETTINGS.target;
+        let display = val >= 10000 && val % 10000 === 0 ? `${val/10000}万円` : `${val.toLocaleString()}円`;
+        document.getElementById('appTitle').innerText = `残置計算アプリ(${display})`;
+    }
+
+    /* --- 計算ロジック --- */
+    function calculate() {
+        let current = {};
+        let total = 0;
+
+        denoms.forEach(d => {
+            let val = parseInt(document.getElementById(`input_${d}`).value) || 0;
+            current[d] = val;
+            total += d * val;
+        });
+
+        let sales = total - APP_SETTINGS.target;
+        let alertArea = document.getElementById('alertArea');
+        alertArea.classList.add('hidden');
+
+        document.getElementById('totalAmount').innerText = `¥${total.toLocaleString()}`;
+        document.getElementById('salesAmount').innerText = `¥${sales.toLocaleString()}`;
+
+        if (sales < 0) {
+            showAlert(`【エラー】レジ総額が${APP_SETTINGS.target.toLocaleString()}円に満たないため計算できません。`);
+            resetResults();
+            return;
+        }
+
+        let withdraw = {10000:0, 5000:0, 2000:0, 1000:0, 500:0, 100:0, 50:0, 10:0, 5:0, 1:0};
+        let w_target = sales; 
+
+        // 1万円と2千円は全回収
+        withdraw[10000] = current[10000]; w_target -= withdraw[10000] * 10000;
+        withdraw[2000] = current[2000]; w_target -= withdraw[2000] * 2000;
+
+        // 【両替提案機能】1万円回収で残置目標を割る場合
+        if (w_target < 0) {
+            let shortage = Math.abs(w_target);
+            let suggestionText = generateExchangeSuggestion(shortage, current, APP_SETTINGS.limits);
+            showAlert(`
+                <p class="font-bold mb-1">【両替推奨】1万円札を回収すると${APP_SETTINGS.target.toLocaleString()}円に届きません。</p>
+                <p>不足分 <b>${shortage.toLocaleString()}円</b> を以下の構成を目安に両替してください。</p>
+                <div class="mt-2 p-2 bg-white rounded border border-red-300 text-red-600 font-bold text-center">
+                    ${suggestionText}
+                </div>
+            `);
+            resetResults();
+            return;
+        }
+
+        // 超過分の小銭を抜く
+        [500, 100, 50, 10, 5, 1].forEach(coin => {
+            let excess = Math.max(0, current[coin] - APP_SETTINGS.limits[coin]);
+            let take = Math.min(excess, Math.floor(w_target / coin));
+            withdraw[coin] = take; w_target -= take * coin;
+        });
+
+        // 優先順に抜く (千円優先)
+        [1000, 500, 100, 50, 10, 5, 1].forEach(denom => {
+            let available = current[denom] - withdraw[denom];
+            let take = Math.min(available, Math.floor(w_target / denom));
+            withdraw[denom] += take; w_target -= take * denom;
+        });
+
+        // 最終手段 (5千円)
+        if (w_target > 0) {
+            let take_5k = Math.min(current[5000] - withdraw[5000], Math.floor(w_target / 5000));
+            withdraw[5000] += take_5k; w_target -= take_5k * 5000;
+        }
+
+        if (w_target > 0) showAlert(`【警告】小銭の構成上、端数 ${w_target.toLocaleString()}円 が合わず正確に残せません。`);
+
+        // 結果反映
+        denoms.forEach(d => {
+            let left = current[d] - withdraw[d];
+            let td = document.getElementById(`result_${d}`);
+            td.innerText = left;
+            td.className = "px-2 py-2 text-center text-2xl result-highlight border";
+        });
+    }
+
+    // スマート両替提案アルゴリズム（不足している金種を優先的に提案）
+    function generateExchangeSuggestion(shortage, current, limits) {
+        let suggestion = {};
+        let rem = shortage;
+        const order = [5000, 1000, 500, 100, 50, 10]; // 5円や1円の細かい両替は省く
+
+        // 1. 希望枚数(limits)に対して足りていない(gapがある)金種を優先して提案
+        for(let d of order) {
+            if (rem <= 0) break;
+            let gap = Math.max(0, limits[d] - current[d]);
+            if (gap > 0) {
+                let addCount = Math.min(gap, Math.floor(rem / d));
+                if (addCount > 0) {
+                    suggestion[d] = addCount;
+                    rem -= addCount * d;
+                }
+            }
+        }
+        
+        // 2. それでも余る場合は千円札を提案
+        if (rem > 0) {
+            let extra1k = Math.floor(rem / 1000);
+            if(extra1k > 0) {
+                suggestion[1000] = (suggestion[1000] || 0) + extra1k;
+                rem -= extra1k * 1000;
+            }
+        }
+
+        let textArray = [];
+        for(let d of [5000, 1000, 500, 100, 50, 10]) {
+            if (suggestion[d]) textArray.push(`${d.toLocaleString()}円 × ${suggestion[d]}枚`);
+        }
+        return textArray.length > 0 ? textArray.join(" <br> ") : "千円札で補充してください";
+    }
+
+    function showAlert(msg) {
+        let alertArea = document.getElementById('alertArea');
+        alertArea.innerHTML = msg; alertArea.classList.remove('hidden');
+    }
+    function resetResults() {
+        denoms.forEach(d => {
+            let td = document.getElementById(`result_${d}`);
+            td.innerText = "-"; td.className = "px-2 py-2 text-center text-2xl text-gray-400";
+        });
+    }
+
+    /* --- ARカメラ関連（映像表示と撮影） --- */
+    const video = document.getElementById('videoElement');
+    const canvas = document.getElementById('canvasElement');
+    let stream = null;
+
+    async function startCamera() {
+        document.getElementById('cameraModal').classList.remove('hidden');
+        try {
+            // スマホのアウトカメラ(背面)を指定
+            stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: { ideal: 1080 } } 
+            });
+            video.srcObject = stream;
+        } catch (err) {
+            alert("カメラの起動に失敗しました。ブラウザのカメラ許可設定を確認してください。");
+            stopCamera();
+        }
+    }
+
+    function stopCamera() {
+        if (stream) { stream.getTracks().forEach(track => track.stop()); }
+        document.getElementById('cameraModal').classList.add('hidden');
+    }
+
+    function captureImage() {
+        // キャンバスに現在のビデオフレームを描画
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        // Data URL形式で画像を取得（ここでOCRエンジンへ渡す）
+        let imageDataUrl = canvas.toDataURL('image/jpeg');
+        
+        stopCamera();
+        alert("画像をキャプチャしました！\n（※本番環境では、ここでTesseract.jsなどのOCRエンジンに画像を渡し、自動で枚数入力される処理へ進みます）");
+    }
+</script>
+
+</body>
+</html>
