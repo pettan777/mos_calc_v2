@@ -10,28 +10,21 @@
         input[type="number"] { font-size: 1.25rem; text-align: right; }
         .result-highlight { background-color: #ebf8ff; color: #2b6cb0; font-weight: bold; }
         
-        /* カメラコンテナ */
         #camera-container { position: relative; width: 100%; max-width: 500px; margin: 0 auto; overflow: hidden; background: #000; border-radius: 0.5rem; }
         video { width: 100%; height: auto; display: block; object-fit: cover; }
-        .ar-overlay {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.6); pointer-events: none;
-        }
-        /* ARガイド枠：左側の「自動釣銭機在高・枚数」列に合わせた縦長の枠 */
+        .ar-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); pointer-events: none; }
+        
         .ar-frame {
-            position: absolute;
-            top: 25%; left: 30%; /* 画面の左寄りに配置 */
-            width: 25%; height: 50%; /* 縦長にする */
-            border: 4px solid #00ff00; /* 認識しやすい緑色 */
-            border-radius: 4px;
+            position: absolute; top: 25%; left: 30%; width: 25%; height: 50%;
+            border: 4px solid #00ff00; border-radius: 4px;
             box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
             display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
-        /* ローディング画面 */
+        
+        /* 修正箇所：display: flex; を削除しました */
         #loadingOverlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(255, 255, 255, 0.9); z-index: 100;
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
         .spinner { border: 4px solid rgba(0,0,0,0.1); width: 50px; height: 50px; border-radius: 50%; border-left-color: #3b82f6; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -39,7 +32,7 @@
 </head>
 <body class="bg-gray-100 text-gray-800 font-sans p-4 relative">
 
-<div id="loadingOverlay" class="hidden">
+<div id="loadingOverlay" style="display: none;" class="flex-col justify-center items-center">
     <div class="spinner mb-4"></div>
     <p id="loadingText" class="text-lg font-bold text-blue-600">画像を解析中...</p>
     <p class="text-sm text-gray-500 mt-2">数秒かかる場合があります</p>
@@ -134,7 +127,6 @@
 <canvas id="croppedCanvas" class="hidden"></canvas>
 
 <script>
-    // --- 既存のUI・計算ロジック（変更なしのため簡略化して結合） ---
     const denoms = [10000, 5000, 2000, 1000, 500, 100, 50, 10, 5, 1];
     let APP_SETTINGS = { target: 150000, limits: { 5000: 15, 1000: 100, 500: 30, 100: 100, 50: 50, 10: 100, 5: 20, 1: 20 } };
 
@@ -166,11 +158,89 @@
     }
 
     function calculate() {
-        // 省略（前回の Ver.2 の calculate() と generateExchangeSuggestion() と同じロジックが入ります）
-        // ※文字数制限のため、ここには前回と同様の計算処理がそのまま入っているものとして進めます。
-        // 実際にお手元で動かす際は、前回の calculate() 関数の中身をここにコピーしてください。
+        let current = {}; let total = 0;
+        denoms.forEach(d => {
+            let val = parseInt(document.getElementById(`input_${d}`).value) || 0;
+            current[d] = val; total += d * val;
+        });
+
+        let sales = total - APP_SETTINGS.target;
+        let alertArea = document.getElementById('alertArea');
+        alertArea.classList.add('hidden');
+
+        document.getElementById('totalAmount').innerText = `¥${total.toLocaleString()}`;
+        document.getElementById('salesAmount').innerText = `¥${sales.toLocaleString()}`;
+
+        if (sales < 0) {
+            showAlert(`【エラー】レジ総額が${APP_SETTINGS.target.toLocaleString()}円に満たないため計算できません。`);
+            resetResults(); return;
+        }
+
+        let withdraw = {10000:0, 5000:0, 2000:0, 1000:0, 500:0, 100:0, 50:0, 10:0, 5:0, 1:0};
+        let w_target = sales; 
+
+        withdraw[10000] = current[10000]; w_target -= withdraw[10000] * 10000;
+        withdraw[2000] = current[2000]; w_target -= withdraw[2000] * 2000;
+
+        if (w_target < 0) {
+            let shortage = Math.abs(w_target);
+            let suggestionText = generateExchangeSuggestion(shortage, current, APP_SETTINGS.limits);
+            showAlert(`
+                <p class="font-bold mb-1">【両替推奨】1万円札を回収すると${APP_SETTINGS.target.toLocaleString()}円に届きません。</p>
+                <p>不足分 <b>${shortage.toLocaleString()}円</b> を以下の構成を目安に両替してください。</p>
+                <div class="mt-2 p-2 bg-white rounded border border-red-300 text-red-600 font-bold text-center">${suggestionText}</div>
+            `);
+            resetResults(); return;
+        }
+
+        [500, 100, 50, 10, 5, 1].forEach(coin => {
+            let excess = Math.max(0, current[coin] - APP_SETTINGS.limits[coin]);
+            let take = Math.min(excess, Math.floor(w_target / coin));
+            withdraw[coin] = take; w_target -= take * coin;
+        });
+
+        [1000, 500, 100, 50, 10, 5, 1].forEach(denom => {
+            let available = current[denom] - withdraw[denom];
+            let take = Math.min(available, Math.floor(w_target / denom));
+            withdraw[denom] += take; w_target -= take * denom;
+        });
+
+        if (w_target > 0) {
+            let take_5k = Math.min(current[5000] - withdraw[5000], Math.floor(w_target / 5000));
+            withdraw[5000] += take_5k; w_target -= take_5k * 5000;
+        }
+
+        if (w_target > 0) showAlert(`【警告】小銭の構成上、端数 ${w_target.toLocaleString()}円 が合わず正確に残せません。`);
+
+        denoms.forEach(d => {
+            let left = current[d] - withdraw[d];
+            let td = document.getElementById(`result_${d}`);
+            td.innerText = left;
+            td.className = "px-2 py-2 text-center text-2xl result-highlight border";
+        });
     }
-    
+
+    function generateExchangeSuggestion(shortage, current, limits) {
+        let suggestion = {}; let rem = shortage; const order = [5000, 1000, 500, 100, 50, 10];
+        for(let d of order) {
+            if (rem <= 0) break;
+            let gap = Math.max(0, limits[d] - current[d]);
+            if (gap > 0) {
+                let addCount = Math.min(gap, Math.floor(rem / d));
+                if (addCount > 0) { suggestion[d] = addCount; rem -= addCount * d; }
+            }
+        }
+        if (rem > 0) {
+            let extra1k = Math.floor(rem / 1000);
+            if(extra1k > 0) { suggestion[1000] = (suggestion[1000] || 0) + extra1k; rem -= extra1k * 1000; }
+        }
+        let textArray = [];
+        for(let d of [5000, 1000, 500, 100, 50, 10]) {
+            if (suggestion[d]) textArray.push(`${d.toLocaleString()}円 × ${suggestion[d]}枚`);
+        }
+        return textArray.length > 0 ? textArray.join(" <br> ") : "千円札で補充してください";
+    }
+
     function showAlert(msg) {
         let alertArea = document.getElementById('alertArea');
         alertArea.innerHTML = msg; alertArea.classList.remove('hidden');
@@ -179,7 +249,7 @@
         denoms.forEach(d => { let td = document.getElementById(`result_${d}`); td.innerText = "-"; td.className = "px-2 py-2 text-center text-2xl text-gray-400"; });
     }
 
-    // --- カメラ＆OCR処理（今回のコア部分） ---
+    /* --- カメラ＆OCR処理 --- */
     const video = document.getElementById('videoElement');
     const canvas = document.getElementById('canvasElement');
     const croppedCanvas = document.getElementById('croppedCanvas');
@@ -191,8 +261,7 @@
             stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1080 } } });
             video.srcObject = stream;
         } catch (err) {
-            alert("カメラを起動できません。");
-            stopCamera();
+            alert("カメラを起動できません。"); stopCamera();
         }
     }
 
@@ -202,21 +271,14 @@
     }
 
     function captureImage() {
-        // 1. ビデオの本来の解像度と、画面に表示されているサイズを取得
-        const vRatio = video.videoWidth / video.videoHeight;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        
-        // 全体を一度キャンバスに描画
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // 2. AR枠（緑の枠）の座標とサイズを計算して画像を切り抜く（クロップ）
         const arFrame = document.getElementById('arFrame');
         const videoRect = video.getBoundingClientRect();
         const frameRect = arFrame.getBoundingClientRect();
 
-        // 画面上の比率から、元画像の切り抜き座標を算出
         const scaleX = video.videoWidth / videoRect.width;
         const scaleY = video.videoHeight / videoRect.height;
         
@@ -225,67 +287,45 @@
         const cropW = frameRect.width * scaleX;
         const cropH = frameRect.height * scaleY;
 
-        croppedCanvas.width = cropW;
-        croppedCanvas.height = cropH;
+        croppedCanvas.width = cropW; croppedCanvas.height = cropH;
         const cropCtx = croppedCanvas.getContext('2d');
         cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
-        // 3. OCR処理へ移行
         stopCamera();
         runOCR(croppedCanvas.toDataURL('image/png'));
     }
 
     async function runOCR(imageData) {
         const loading = document.getElementById('loadingOverlay');
-        loading.classList.remove('hidden');
+        /* 修正箇所：JS側からも確実に表示・非表示を切り替えるように変更 */
+        loading.style.display = 'flex';
         
         try {
-            // Tesseractで画像解析（数字だけを認識させるモード）
             const result = await Tesseract.recognize(
                 imageData,
-                'eng', // 英語モード（数字は英語モードの方が精度が高い）
-                { 
-                    logger: m => console.log(m),
-                    tessedit_char_whitelist: '0123456789' // 数字以外は無視する
-                }
+                'eng',
+                { logger: m => console.log(m), tessedit_char_whitelist: '0123456789' }
             );
-
-            console.log("OCR認識テキスト:", result.data.text);
             parseOCRResult(result.data.text);
-
         } catch (error) {
-            console.error(error);
-            alert("画像の解析に失敗しました。手動で入力してください。");
+            console.error(error); alert("画像の解析に失敗しました。手動で入力してください。");
         } finally {
-            loading.classList.add('hidden');
+            loading.style.display = 'none';
         }
     }
 
     function parseOCRResult(text) {
-        // 読み取ったテキストから、改行やスペースで区切られた数字の配列を作る
-        // 例: "2 \n 11 \n 0 \n 96" -> [2, 11, 0, 96]
         const numbers = text.match(/\d+/g);
-
         if (!numbers || numbers.length < 5) {
-            alert("数字が正しく読み取れませんでした。枠に合わせて再度撮影するか、手動で入力してください。");
-            return;
+            alert("数字が正しく読み取れませんでした。手動で入力してください。"); return;
         }
-
-        // 上から順に金種に割り当てる（1万, 5千, 2千, 1千, 500, 100, 50, 10, 5, 1）
-        // ※2千円札の「0」も読み取れている前提で10個並ぶはず
         for (let i = 0; i < Math.min(numbers.length, denoms.length); i++) {
             let d = denoms[i];
             let inputField = document.getElementById(`input_${d}`);
-            if (inputField) {
-                inputField.value = parseInt(numbers[i], 10);
-            }
+            if (inputField) { inputField.value = parseInt(numbers[i], 10); }
         }
-        
-        // 読み取り完了のアラートを出し、自動で計算を実行
-        showAlert(`画像を解析し、${numbers.length}項目の数値を入力しました。内容が正しいか確認してください。`);
-        // calculate(); // 自動計算を走らせる場合はコメントアウトを外す
+        showAlert(`画像を解析し、数値を入力しました。内容が正しいか確認して「計算する」を押してください。`);
     }
 </script>
-
 </body>
 </html>
